@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 
-APP = Path(__file__).resolve().parents[1] / "badge25/apps/jk/__init__.py"
+APP = Path(__file__).resolve().parent / "__init__.py"
 
 
 class JokeTests(unittest.TestCase):
@@ -26,12 +26,10 @@ class JokeTests(unittest.TestCase):
                 brushes=Mock(), run=Mock(),
             ),
         }
-        self.font_files = ["ziplock.ppf", "nope.ppf", "ark.ppf", "MonaSans-Medium.af"]
         self.font_loader = modules["badgeware"].PixelFont.load
-        with patch.dict(sys.modules, modules), patch("os.listdir", return_value=self.font_files):
+        with patch.dict(sys.modules, modules):
             app = runpy.run_path(str(APP))
         self.app = app["update"].__globals__
-        self.app["font_files"] = ["ark.ppf", "nope.ppf", "ziplock.ppf"]
         self.app["first_frame"] = False
         self.app["wlan"] = Mock()
         self.app["wlan"].isconnected.return_value = True
@@ -48,66 +46,23 @@ class JokeTests(unittest.TestCase):
         self.app["update"]()
         return [
             call.args[0] for call in self.screen.text.call_args_list
-            if call.args[0] != self.app["font_name"]
         ]
 
-    def test_font_cycle_and_bottom_right_label(self):
+    def test_smart_font_stays_fixed_without_label(self):
         self.respond([{"setup": "Setup", "punchline": "Punch"}])
-        self.assertEqual(self.app["font_files"], ["ark.ppf", "nope.ppf", "ziplock.ppf"])
-        for ticks, name in [(0, "ark"), (10000, "nope"), (20000, "ziplock"), (30000, "ark")]:
-            self.frame(ticks)
-            self.assertEqual(self.app["font_name"], name)
-            self.assertEqual(self.screen.font, self.app["joke_font"])
-            if name != "nope":
-                self.font_loader.assert_called_with(self.app["FONT_DIR"] + name + ".ppf")
-            self.screen.text.assert_any_call(name, 160 - len(name) * 6 - 3, 109)
-            self.frame(ticks + 5000)
-            self.assertEqual(self.app["font_name"], name)
+        font = self.screen.font
+        for ticks in (0, 10000, 20000):
+            self.assertEqual(self.frame(ticks), ["Setup"])
+            self.assertEqual(self.frame(ticks + 5000), ["Setup", "Punch"])
+            self.assertIs(self.screen.font, font)
+        self.font_loader.assert_called_once_with("/system/assets/fonts/smart.ppf")
 
-    def test_font_scan_failure_and_empty_directory(self):
-        expected = [name + ".ppf" for name in self.app["BUNDLED_FONTS"]]
-        with patch("os.listdir", side_effect=OSError("cannot list fonts")):
-            self.assertEqual(self.app["available_fonts"](), expected)
-        with patch("os.listdir", return_value=["._broken.ppf", "other.af"]):
-            self.assertEqual(self.app["available_fonts"](), expected)
-        with patch("os.listdir", return_value=["nope.ppf"]):
-            self.assertEqual(self.app["available_fonts"](), expected)
-
-    def test_font_cycle_when_directory_scan_fails(self):
-        self.app["font_files"] = []
-        self.respond([{"setup": "Setup", "punchline": "Punch"}])
-        with patch("os.listdir", side_effect=OSError("cannot list fonts")):
-            self.frame(0)
-        self.assertEqual(self.app["font_name"], "absolute")
-        self.frame(5000)
-        self.frame(10000)
-        self.assertEqual(self.app["font_name"], "ark")
-        self.frame(15000)
-        self.frame(20000)
-        self.assertEqual(self.app["font_name"], "awesome")
-
-    def test_bundled_fonts_match_repository_assets(self):
-        actual = sorted(path.stem for path in (APP.parents[2] / "assets/fonts").glob("*.ppf"))
-        self.assertEqual(list(self.app["BUNDLED_FONTS"]), actual)
-
-    def test_launcher_draws_before_network_or_font_scan(self):
-        self.app["font_files"] = []
+    def test_launcher_draws_before_network(self):
         self.app["first_frame"] = True
         self.respond([{"setup": "Setup", "punchline": "Punch"}])
-        with patch("os.listdir", return_value=self.font_files) as scan:
-            self.assertEqual(self.frame(0), ["Connecting Wi-Fi"])
-            scan.assert_not_called()
-            self.urlopen.assert_not_called()
-            self.assertEqual(self.frame(1), ["Setup"])
-            scan.assert_called_once_with(self.app["FONT_DIR"])
-            self.assertEqual(self.app["font_files"], ["ark.ppf", "nope.ppf", "ziplock.ppf"])
-
-    def test_unreadable_font_does_not_interrupt_joke(self):
-        self.respond([{"setup": "Setup", "punchline": "Punch"}])
-        self.font_loader.side_effect = OSError("bad font")
-        self.assertEqual(self.frame(0), ["Setup"])
-        self.assertEqual(self.app["font_name"], "nope")
-        self.assertEqual(self.frame(5000), ["Setup", "Punch"])
+        self.assertEqual(self.frame(0), ["Connecting Wi-Fi"])
+        self.urlopen.assert_not_called()
+        self.assertEqual(self.frame(1), ["Setup"])
 
     def test_drawing_does_not_require_font_getter(self):
         screen = self.screen
