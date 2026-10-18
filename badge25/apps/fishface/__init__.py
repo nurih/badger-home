@@ -2,15 +2,19 @@ import os
 import sys
 import gc
 import json
+import hashlib
+import binascii
 import network
 from urllib.urequest import urlopen
 from badgeware import screen, PixelFont, Image, brushes, io, run
 
 APP_DIR = "/system/apps/fishface"
-SLIDE_PATHS = ("/fishface-selfie.png", "/fishface-match.png")
+CACHE_DIR = "/fishface-cache"
+CACHE_BYTES = 512 * 1024
+REFRESH_MS = 600000
 FISHFACE_API_URL = ""
 FISHFACE_SITE_URL = ""
-SLIDE_MS = 3000
+SLIDE_MS = 4000
 os.chdir(APP_DIR)
 sys.path.insert(0, APP_DIR)
 screen.font = PixelFont.load("/system/assets/fonts/nope.ppf")
@@ -24,7 +28,7 @@ next_before = None
 index = -1
 view = 0
 pair_step = 0
-cached_entry = None
+batch_times = {}
 photo = None
 paused = False
 last_slide = 0
@@ -39,6 +43,11 @@ def init():
         import secrets
         FISHFACE_API_URL = secrets.FISHFACE_API_URL.rstrip("/")
         FISHFACE_SITE_URL = secrets.FISHFACE_SITE_URL.rstrip("/")
+        try:
+            os.mkdir(CACHE_DIR)
+        except OSError as error:
+            if error.args[0] != 17:
+                raise
         wlan = network.WLAN(network.STA_IF)
         wlan.active(True)
         if not wlan.isconnected():
@@ -51,18 +60,70 @@ def init():
         sys.path.pop(0)
 
 
+def cache_path(key, suffix):
+    key = FISHFACE_API_URL + "|" + FISHFACE_SITE_URL + "|" + key
+    digest = binascii.hexlify(hashlib.sha256(key.encode()).digest()).decode()
+    return CACHE_DIR + "/" + digest + suffix
+
+
+def trim_cache(reserve=0, keep=()):
+    files = []
+    total = 0
+    for name in os.listdir(CACHE_DIR):
+        path = CACHE_DIR + "/" + name
+        info = os.stat(path)
+        total += info[6]
+        files.append((info[8], path, info[6]))
+    for _, path, size in sorted(files):
+        if total + reserve <= CACHE_BYTES:
+            break
+        if path in keep:
+            continue
+        os.remove(path)
+        total -= size
+        batch_times.pop(path, None)
+
+
 def fetch_batch():
     global entries, next_before, index
     url = FISHFACE_API_URL + "/api/booth/gallery"
     if next_before:
         url += "?before=" + next_before
-    response = urlopen(url)
+    path = cache_path(url, ".json")
+    batch = None
     try:
-        batch = json.loads(response.read())
-    finally:
-        response.close()
+        with open(path) as source:
+            batch = json.load(source)
+    except (OSError, ValueError):
+        pass
+    if batch is not None and path not in batch_times:
+        batch_times[path] = io.ticks
+    if batch is None or io.ticks - batch_times[path] >= REFRESH_MS:
+        try:
+            print("FishFace batch: fetching", url)
+            response = urlopen(url)
+            try:
+                fresh = json.loads(response.read())
+            finally:
+                response.close()
+            trim_cache(16384)
+            with open(path + ".tmp", "w") as output:
+                json.dump(fresh, output)
+            os.rename(path + ".tmp", path)
+            batch = fresh
+            batch_times[path] = io.ticks
+        except Exception as error:
+            print("FishFace batch: fetch failed", repr(error))
+            if batch is None:
+                raise
+            print("FishFace batch: using stale cache")
+            # Use stale results when offline; retry refresh in 30 seconds.
+            batch_times[path] = io.ticks - REFRESH_MS + 30000
+    else:
+        print("FishFace batch: using cache")
     entries = batch["entries"]
     next_before = batch.get("nextBefore")
+    print("FishFace batch: loaded", len(entries), "entries; next cursor:", next_before)
     index = 0
 
 
@@ -81,14 +142,20 @@ def image_url(entry, view):
 
 
 def load_photo():
-    global photo, cached_entry
+    global photo
     entry = entries[index]
-    if cached_entry != entry["id"]:
-        cached_entry = None
-        for pair_view in (0, 1):
-            response = urlopen(image_url(entry, pair_view))
+    paths = []
+    for pair_view in (0, 1):
+        url = image_url(entry, pair_view)
+        path = cache_path(url, ".png")
+        paths.append(path)
+        try:
+            os.stat(path)
+        except OSError:
+            trim_cache(65536, paths)
+            response = urlopen(url)
             try:
-                with open(SLIDE_PATHS[pair_view], "wb") as output:
+                with open(path + ".tmp", "wb") as output:
                     while True:
                         chunk = response.read(1024)
                         if not chunk:
@@ -96,10 +163,14 @@ def load_photo():
                         output.write(chunk)
             finally:
                 response.close()
-        cached_entry = entry["id"]
+            os.rename(path + ".tmp", path)
     photo = None
     gc.collect()
-    photo = Image.load(SLIDE_PATHS[view])
+    try:
+        photo = Image.load(paths[view])
+    except Exception:
+        os.remove(paths[view])
+        raise
 
 
 def advance(next_entry=False):
@@ -127,7 +198,7 @@ def advance(next_entry=False):
 
 def update():
     global view, pair_step, paused, last_slide
-    if wlan and wlan.isconnected():
+    if wlan:
         if index < 0 or not entries:
             if io.ticks >= retry_at:
                 advance()
@@ -164,14 +235,6 @@ def update():
         label = "Connecting Wi-Fi"
     screen.text(label, 3, 1)
     screen.blit(logo, (160 - logo.width) // 2, 92)
-
-
-def on_exit():
-    for path in SLIDE_PATHS:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
 
 
 if __name__ == "__main__":

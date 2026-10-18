@@ -28,12 +28,17 @@ which discovers apps and supports multiple pages. Restart the badge.
 - C: next gallery entry.
 - HOME: return to menu.
 
-After the last batch, the app fetches the newest entries again. Empty galleries
+After the last batch, the app returns to the first cached batch. Gallery batches
+are saved locally and refreshed when used after five minutes. On restart, saved
+batches are reused for five minutes before refresh. If refresh fails, the app
+keeps the saved results and retries refresh after 30 seconds. Empty galleries
 and failed initial loads retry after 30 seconds. Network calls can pause the UI
 while they complete. The app uses the public gallery API; it needs no
 MongoDB credentials.
 
-Both images are downloaded once per entry, then switched locally. Temporary
-images are stored at `/fishface-selfie.png` and `/fishface-match.png` on the
-writable root filesystem and removed on exit. `/system` is read-only while
-apps run.
+Gallery results and images are saved in `/fishface-cache` on the writable root
+filesystem. The cache survives app exits and restarts. Images are keyed by URL,
+so shared fish images are reused between players. Cached pairs can play offline.
+The cache has a 512 KiB budget; older files are removed to make room for new
+downloads. Evicted images are downloaded again when needed. `/system` is
+read-only while apps run.

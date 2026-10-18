@@ -3,11 +3,13 @@
 from io import BytesIO
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import patch, mock_open
+import tempfile
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,6 +41,13 @@ class FishFaceTests(unittest.TestCase):
         self.io = io
         app.FISHFACE_API_URL = "https://api.example.test"
         app.FISHFACE_SITE_URL = "https://site.example.test/FishFace"
+        cache = tempfile.TemporaryDirectory()
+        self.addCleanup(cache.cleanup)
+        app.CACHE_DIR = cache.name.replace("\\", "/")
+        # MicroPython rename replaces existing files; Windows rename does not.
+        rename = patch.object(app.os, "rename", os.replace)
+        rename.start()
+        self.addCleanup(rename.stop)
 
     def test_image_urls(self):
         from urllib.parse import parse_qs, urlsplit
@@ -81,19 +90,64 @@ class FishFaceTests(unittest.TestCase):
         app.index = 0
         responses = [BytesIO(b"test image bytes"), BytesIO(b"match image bytes")]
         with patch.object(app, "urlopen", side_effect=responses) as get, \
-                patch("builtins.open", mock_open()) as output, \
                 patch.object(app.Image, "load") as load:
             app.load_photo()
-            load.assert_called_once_with("/fishface-selfie.png")
+            selfie = app.cache_path(app.image_url(app.entries[0], 0), ".png")
+            match = app.cache_path(app.image_url(app.entries[0], 1), ".png")
+            load.assert_called_once_with(selfie)
             app.view = 1
             app.load_photo()
             self.assertEqual(get.call_count, 2)
-            load.assert_called_with("/fishface-match.png")
-        self.assertEqual([call.args[0] for call in output.call_args_list], list(app.SLIDE_PATHS))
+            load.assert_called_with(match)
+            # Returning to the pair does not download either image again.
+            app.index = 0
+            app.load_photo()
+            self.assertEqual(get.call_count, 2)
+        self.assertEqual(Path(selfie).read_bytes(), b"test image bytes")
+        self.assertEqual(Path(match).read_bytes(), b"match image bytes")
         self.assertTrue(all(response.closed for response in responses))
-        with patch.object(app.os, "remove") as remove:
-            app.on_exit()
-        self.assertEqual([call.args[0] for call in remove.call_args_list], list(app.SLIDE_PATHS))
+        with patch.object(app.Image, "load", side_effect=ValueError("bad PNG")), \
+                patch.object(app, "urlopen") as get:
+            with self.assertRaises(ValueError):
+                app.load_photo()
+            get.assert_not_called()
+        self.assertFalse(Path(match).exists())
+        self.assertTrue(Path(selfie).exists())
+
+    def test_gallery_cache_refresh_and_offline_fallback(self):
+        app = self.app
+        batch = {"entries": [{"id": "a"}], "nextBefore": None}
+        with patch.object(app, "urlopen", return_value=BytesIO(json.dumps(batch).encode())) as get:
+            app.fetch_batch()
+            app.fetch_batch()
+            self.assertEqual(get.call_count, 1)
+        # A new session can read persisted JSON without a network request.
+        app.batch_times.clear()
+        with patch.object(app, "urlopen", side_effect=OSError("offline")) as get:
+            app.fetch_batch()
+            get.assert_not_called()
+            self.io.ticks += app.REFRESH_MS
+            app.fetch_batch()
+            self.assertEqual(get.call_count, 1)
+            self.assertEqual(app.entries, batch["entries"])
+            app.fetch_batch()
+            self.assertEqual(get.call_count, 1)
+        self.io.ticks += 30000
+        batch["entries"] = [{"id": "new"}]
+        with patch.object(app, "urlopen", return_value=BytesIO(json.dumps(batch).encode())):
+            app.fetch_batch()
+        self.assertEqual(app.entries, [{"id": "new"}])
+
+    def test_cache_eviction_stays_in_cache_directory(self):
+        app = self.app
+        app.CACHE_BYTES = 10
+        old = Path(app.CACHE_DIR) / "old.png"
+        keep = Path(app.CACHE_DIR) / "keep.png"
+        old.write_bytes(b"123456")
+        keep.write_bytes(b"123456")
+        app.trim_cache(0, [keep.as_posix()])
+        self.assertFalse(old.exists())
+        self.assertTrue(keep.exists())
 
     def test_badge_rotation_pagination_pause_and_retry(self):
         app, io = self.app, self.io
@@ -120,7 +174,8 @@ class FishFaceTests(unittest.TestCase):
             app.advance(True)
             self.assertTrue(get.call_args.args[0].endswith("?before=b"))
             app.advance(True)
-            self.assertFalse("before=" in get.call_args.args[0])
+            self.assertEqual(app.entries, first["entries"])
+            self.assertEqual(get.call_count, 2)
             io.pressed = {"B"}
             app.update()
             count = load.call_count
@@ -130,6 +185,8 @@ class FishFaceTests(unittest.TestCase):
             self.assertEqual(load.call_count, count)
         app.entries = []
         app.index = -1
+        for path in Path(app.CACHE_DIR).iterdir():
+            path.unlink()
         io.ticks = 100000
         with patch.object(app, "urlopen", side_effect=OSError("offline")) as get:
             app.update()
