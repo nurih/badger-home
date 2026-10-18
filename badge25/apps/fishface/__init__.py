@@ -6,7 +6,7 @@ import hashlib
 import binascii
 import network
 from urllib.urequest import urlopen
-from badgeware import screen, PixelFont, Image, brushes, io, run
+from badgeware import screen, PixelFont, Image, brushes, shapes, io, run
 
 APP_DIR = "/system/apps/fishface"
 CACHE_DIR = "/fishface-cache"
@@ -21,6 +21,17 @@ screen.font = PixelFont.load("/system/assets/fonts/smart.ppf")
 logo = Image.load("logo.png")
 black = brushes.color(0, 0, 0)
 white = brushes.color(255, 255, 255)
+fish_colors = (brushes.color(255, 80, 24), brushes.color(80, 240, 100))
+FISH_X = screen.width - 21
+fish_body = tuple(shapes.rectangle(FISH_X + x, 1 + y, width, 1)
+                  for y, x, width in ((0, 8, 5), (1, 6, 9), (2, 0, 2), (2, 5, 11),
+                                      (3, 0, 4), (3, 4, 13), (4, 0, 18), (5, 0, 18),
+                                      (6, 0, 4), (6, 4, 13), (7, 0, 2), (7, 5, 11),
+                                      (8, 6, 9), (9, 8, 5)))
+fish_faces = tuple(tuple(shapes.rectangle(FISH_X + x, 1 + y, 1, 1) for x, y in pixels)
+                   for pixels in (((12, 2), (14, 2), (13, 3), (12, 4), (14, 4),
+                                   (14, 6), (15, 6), (13, 7), (16, 7)),
+                                  ((13, 3), (13, 6), (16, 6), (14, 7), (15, 7))))
 
 wlan = None
 entries = []
@@ -223,6 +234,16 @@ def update():
         label = entries[index].get("fullName") or "Player"
         if paused:
             label += " (paused)"
+        while label and screen.measure_text(label)[0] > FISH_X - 6:
+            label = label[:-1]
+        happy = entries[index]["target"]["id"] == entries[index]["match"]["id"]
+        screen.brush = fish_colors[happy]
+        for shape in fish_body:
+            screen.draw(shape)
+        screen.brush = black
+        for shape in fish_faces[happy]:
+            screen.draw(shape)
+        screen.brush = white
     else:
         label = "Connecting Wi-Fi"
     screen.text(label, 3, 1)

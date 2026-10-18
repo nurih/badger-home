@@ -5,6 +5,9 @@ https://nurih.github.io/FishFace/booth/. Each image fits within 50x50 pixels.
 The three images form one centered row with 1 pixel between images.
 Each row stays for 30 seconds, then moves to the next entry.
 The label shows the player's name.
+A fish follows the name in the top-right corner: bright green and happy when
+the target and best matched fish are the same, red-orange and dead when they differ. Long names are clipped
+to leave room for the fish.
 The supplied MongoDB.local logo stays on a black footer.
 
 The 2025 firmware loads PNG only. The badge requests resized PNG images

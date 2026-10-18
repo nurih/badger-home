@@ -1,4 +1,4 @@
-"""Run with: python -m unittest discover -s tools -p test_fishface.py"""
+"""Run with: python -m unittest discover -s badge25/apps/fishface -p test_fishface.py"""
 
 from io import BytesIO
 import importlib.util
@@ -11,13 +11,14 @@ import unittest
 import tempfile
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 class FishFaceTests(unittest.TestCase):
     def setUp(self):
         screen = SimpleNamespace(width=160, clear=lambda: None, blit=lambda *a: None,
-                                 text=lambda *a: None)
+                                 text=lambda *a: None, draw=lambda *a: None,
+                                 measure_text=lambda text: (len(text) * 5, 8))
         io = SimpleNamespace(ticks=0, pressed=set(), BUTTON_A="A", BUTTON_B="B", BUTTON_C="C")
         badgeware = ModuleType("badgeware")
         badgeware.screen = screen
@@ -25,6 +26,7 @@ class FishFaceTests(unittest.TestCase):
         badgeware.Image = SimpleNamespace(load=lambda path: SimpleNamespace(width=150, height=27))
         badgeware.PixelFont = SimpleNamespace(load=lambda path: None)
         badgeware.brushes = SimpleNamespace(color=lambda *args: args)
+        badgeware.shapes = SimpleNamespace(rectangle=lambda *args: args)
         badgeware.run = lambda update: None
         http = ModuleType("urllib.urequest")
         http.urlopen = lambda url: None
@@ -158,6 +160,8 @@ class FishFaceTests(unittest.TestCase):
         app.wlan = SimpleNamespace(isconnected=lambda: True)
         first = {"entries": [{"id": "a", "fullName": "Alex"}, {"id": "b"}], "nextBefore": "b"}
         last = {"entries": [{"id": "c"}], "nextBefore": None}
+        for entry in first["entries"] + last["entries"]:
+            entry.update(target={"id": "fish-1"}, match={"id": "fish-2"})
         with patch.object(app, "urlopen", side_effect=lambda url: BytesIO(json.dumps(last if "before=" in url else first).encode())) as get, \
                 patch.object(app, "load_photo") as load, \
                 patch.object(app.screen, "text") as text:
