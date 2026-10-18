@@ -14,10 +14,10 @@ CACHE_BYTES = 512 * 1024
 REFRESH_MS = 600000
 FISHFACE_API_URL = ""
 FISHFACE_SITE_URL = ""
-SLIDE_MS = 4000
+SLIDE_MS = 30000
 os.chdir(APP_DIR)
 sys.path.insert(0, APP_DIR)
-screen.font = PixelFont.load("/system/assets/fonts/nope.ppf")
+screen.font = PixelFont.load("/system/assets/fonts/smart.ppf")
 logo = Image.load("logo.png")
 black = brushes.color(0, 0, 0)
 white = brushes.color(255, 255, 255)
@@ -26,10 +26,8 @@ wlan = None
 entries = []
 next_before = None
 index = -1
-view = 0
-pair_step = 0
 batch_times = {}
-photo = None
+photos = ()
 paused = False
 last_slide = 0
 retry_at = 0
@@ -128,7 +126,7 @@ def fetch_batch():
 
 
 def image_url(entry, view):
-    path = entry["selfieUrl"] if view == 0 else entry["match"]["imageUrl"]
+    path = (entry["target"]["imageUrl"], entry["selfieUrl"], entry["match"]["imageUrl"])[view]
     if path.startswith("/api/media/fish/"):
         path = path.replace("/api/media/fish/", "/fish/", 1)
     if path.startswith("/fish/"):
@@ -138,21 +136,22 @@ def image_url(entry, view):
     encoded = "".join(chr(c) if (65 <= c <= 90 or 97 <= c <= 122 or
                                48 <= c <= 57 or c in b"-._~") else "%%%02X" % c
                       for c in path.encode("utf-8"))
-    return "https://wsrv.nl/?url=" + encoded + "&w=160&h=76&fit=inside&output=png"
+    return "https://wsrv.nl/?url=" + encoded + "&w=50&h=50&fit=inside&output=png"
 
 
 def load_photo():
-    global photo
+    global photos
     entry = entries[index]
     paths = []
-    for pair_view in (0, 1):
-        url = image_url(entry, pair_view)
+    for view in (0, 1, 2):
+        url = image_url(entry, view)
         path = cache_path(url, ".png")
         paths.append(path)
         try:
             os.stat(path)
         except OSError:
             trim_cache(65536, paths)
+            print("FishFace image: fetching", ("target", "selfie", "match")[view], url)
             response = urlopen(url)
             try:
                 with open(path + ".tmp", "wb") as output:
@@ -164,26 +163,25 @@ def load_photo():
             finally:
                 response.close()
             os.rename(path + ".tmp", path)
-    photo = None
+    photos = ()
     gc.collect()
-    try:
-        photo = Image.load(paths[view])
-    except Exception:
-        os.remove(paths[view])
-        raise
+    loaded = []
+    for path in paths:
+        try:
+            loaded.append(Image.load(path))
+        except Exception:
+            os.remove(path)
+            raise
+    photos = tuple(loaded)
 
 
-def advance(next_entry=False):
-    global index, view, pair_step, last_slide, retry_at, status
+def advance():
+    global index, last_slide, retry_at, status
     try:
-        if not entries or (next_entry and index + 1 >= len(entries)):
+        if not entries or index + 1 >= len(entries):
             fetch_batch()
-            view = 0
-            pair_step = 0
-        elif next_entry:
+        else:
             index += 1
-            view = 0
-            pair_step = 0
         if entries:
             load_photo()
             status = ""
@@ -197,8 +195,8 @@ def advance(next_entry=False):
 
 
 def update():
-    global view, pair_step, paused, last_slide
-    if wlan:
+    global paused, last_slide
+    if wlan and wlan.isconnected():
         if index < 0 or not entries:
             if io.ticks >= retry_at:
                 advance()
@@ -206,29 +204,23 @@ def update():
             if io.BUTTON_B in io.pressed:
                 paused = not paused
                 last_slide = io.ticks
-            if io.BUTTON_C in io.pressed:
-                advance(True)
-            elif io.BUTTON_A in io.pressed:
-                view = 1 - view
-                pair_step = view
+            if any([button in io.pressed for button in (io.BUTTON_A, io.BUTTON_C)]):
                 advance()
             elif not paused and io.ticks - last_slide >= SLIDE_MS:
-                pair_step += 1
-                if pair_step == 6:
-                    advance(True)
-                else:
-                    view = pair_step % 2
-                    advance()
+                advance()
 
     screen.brush = black
     screen.clear()
-    if photo:
-        screen.blit(photo, (160 - photo.width) // 2, 13 + (76 - photo.height) // 2)
+    if photos:
+        x = (screen.width - sum([photo.width for photo in photos]) - 2) // 2
+        for photo in photos:
+            screen.blit(photo, x, 13 + (76 - photo.height) // 2)
+            x += photo.width + 1
     screen.brush = white
     if status:
         label = status
     elif entries:
-        label = (entries[index].get("fullName") or "Player") if view == 0 else "Best match"
+        label = entries[index].get("fullName") or "Player"
         if paused:
             label += " (paused)"
     else:

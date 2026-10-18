@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class FishFaceTests(unittest.TestCase):
     def setUp(self):
-        screen = SimpleNamespace(clear=lambda: None, blit=lambda *a: None,
+        screen = SimpleNamespace(width=160, clear=lambda: None, blit=lambda *a: None,
                                  text=lambda *a: None)
         io = SimpleNamespace(ticks=0, pressed=set(), BUTTON_A="A", BUTTON_B="B", BUTTON_C="C")
         badgeware = ModuleType("badgeware")
@@ -58,12 +58,14 @@ class FishFaceTests(unittest.TestCase):
         for path in ("/api/media/fish/fish-005.jpg", "/fish/fish-005.jpg",
                      app.FISHFACE_SITE_URL + "/fish/fish-005.jpg"):
             entry["match"]["imageUrl"] = path
-            query = parse_qs(urlsplit(app.image_url(entry, 1)).query)
+            query = parse_qs(urlsplit(app.image_url(entry, 2)).query)
             self.assertEqual(query["url"], [app.FISHFACE_SITE_URL + "/fish/fish-005.jpg"])
             self.assertEqual(query["output"], ["png"])
-            self.assertEqual((query["w"], query["h"]), (["160"], ["76"]))
-        entry["selfieUrl"] += "?a=1&b=two words"
+            self.assertEqual((query["w"], query["h"]), (["50"], ["50"]))
         query = parse_qs(urlsplit(app.image_url(entry, 0)).query)
+        self.assertEqual(query["url"], [app.FISHFACE_SITE_URL + "/fish/fish-999.jpg"])
+        entry["selfieUrl"] += "?a=1&b=two words"
+        query = parse_qs(urlsplit(app.image_url(entry, 1)).query)
         self.assertEqual(query["url"], [app.FISHFACE_API_URL + entry["selfieUrl"]])
 
     def test_wifi_without_pc_service_setting(self):
@@ -86,23 +88,24 @@ class FishFaceTests(unittest.TestCase):
     def test_photo_uses_writable_root(self):
         app = self.app
         app.entries = [{"id": "a", "selfieUrl": "/api/media/selfie/" + "a" * 24,
+                        "target": {"imageUrl": "/fish/fish-999.jpg"},
                         "match": {"imageUrl": "/fish/fish-005.jpg"}}]
         app.index = 0
-        responses = [BytesIO(b"test image bytes"), BytesIO(b"match image bytes")]
+        responses = [BytesIO(b"target image bytes"), BytesIO(b"test image bytes"), BytesIO(b"match image bytes")]
         with patch.object(app, "urlopen", side_effect=responses) as get, \
                 patch.object(app.Image, "load") as load:
             app.load_photo()
-            selfie = app.cache_path(app.image_url(app.entries[0], 0), ".png")
-            match = app.cache_path(app.image_url(app.entries[0], 1), ".png")
-            load.assert_called_once_with(selfie)
-            app.view = 1
+            target, selfie, match = [app.cache_path(app.image_url(app.entries[0], view), ".png")
+                                     for view in (0, 1, 2)]
+            self.assertEqual([call.args[0] for call in load.call_args_list], [target, selfie, match])
+            self.assertEqual(len(app.photos), 3)
             app.load_photo()
-            self.assertEqual(get.call_count, 2)
+            self.assertEqual(get.call_count, 3)
             load.assert_called_with(match)
-            # Returning to the pair does not download either image again.
+            # Returning to the row does not download any image again.
             app.index = 0
             app.load_photo()
-            self.assertEqual(get.call_count, 2)
+            self.assertEqual(get.call_count, 3)
         self.assertEqual(Path(selfie).read_bytes(), b"test image bytes")
         self.assertEqual(Path(match).read_bytes(), b"match image bytes")
         self.assertTrue(all(response.closed for response in responses))
@@ -111,8 +114,9 @@ class FishFaceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 app.load_photo()
             get.assert_not_called()
-        self.assertFalse(Path(match).exists())
+        self.assertFalse(Path(target).exists())
         self.assertTrue(Path(selfie).exists())
+        self.assertTrue(Path(match).exists())
 
     def test_gallery_cache_refresh_and_offline_fallback(self):
         app = self.app
@@ -158,29 +162,26 @@ class FishFaceTests(unittest.TestCase):
                 patch.object(app, "load_photo") as load, \
                 patch.object(app.screen, "text") as text:
             app.update()
-            self.assertEqual((app.index, app.view), (0, 0))
+            self.assertEqual(app.index, 0)
             text.assert_called_with("Alex", 3, 1)
-            for step in range(1, 6):
-                io.ticks = step * 3000 - 1
-                app.update()
-                self.assertEqual((app.index, app.view), (0, (step - 1) % 2))
-                io.ticks += 1
-                app.update()
-                self.assertEqual((app.index, app.view), (0, step % 2))
-            io.ticks = 18000
+            io.ticks = 29999
             app.update()
-            self.assertEqual((app.index, app.view), (1, 0))
-            self.assertEqual(app.pair_step, 0)
-            app.advance(True)
+            self.assertEqual(app.index, 0)
+            io.ticks = 30000
+            app.update()
+            self.assertEqual(app.index, 1)
+            io.pressed = {"A"}
+            app.update()
             self.assertTrue(get.call_args.args[0].endswith("?before=b"))
-            app.advance(True)
+            io.pressed = {"C"}
+            app.update()
             self.assertEqual(app.entries, first["entries"])
             self.assertEqual(get.call_count, 2)
             io.pressed = {"B"}
             app.update()
             count = load.call_count
             io.pressed = set()
-            io.ticks += 20000
+            io.ticks += 30000
             app.update()
             self.assertEqual(load.call_count, count)
         app.entries = []
@@ -193,6 +194,26 @@ class FishFaceTests(unittest.TestCase):
             app.update()
             self.assertEqual(get.call_count, 1)
             self.assertEqual(app.status, "Fetch: offline")
+
+    def test_centered_image_row(self):
+        app = self.app
+        app.photos = tuple(SimpleNamespace(width=w, height=h)
+                           for w, h in [(50, 40), (40, 50), (50, 30)])
+        with patch.object(app.screen, "blit") as blit:
+            app.update()
+        row = blit.call_args_list[:3]
+        self.assertEqual([call.args[1:] for call in row], [(9, 31), (60, 26), (101, 36)])
+        self.assertEqual(160 - (101 + 50), 9)
+
+    def test_waits_for_wifi_before_loading_cached_gallery(self):
+        app = self.app
+        app.wlan = SimpleNamespace(isconnected=lambda: False)
+        with patch.object(app, "advance") as advance:
+            app.update()
+            advance.assert_not_called()
+            app.wlan.isconnected = lambda: True
+            app.update()
+            advance.assert_called_once_with()
 
 
 if __name__ == "__main__":

@@ -1,9 +1,10 @@
 # FishFace for Universe 2025
 
-Shows gallery selfies and best matched fish from the same API as
-https://nurih.github.io/FishFace/booth/. Each pair runs as selfie, match,
-selfie, match, selfie, match, with 3 seconds per image, then moves to the next
-entry. The selfie label shows the player's name.
+Shows the target fish, selfie, and best matched fish from the same API as
+https://nurih.github.io/FishFace/booth/. Each image fits within 50x50 pixels.
+The three images form one centered row with 1 pixel between images.
+Each row stays for 30 seconds, then moves to the next entry.
+The label shows the player's name.
 The supplied MongoDB.local logo stays on a black footer.
 
 The 2025 firmware loads PNG only. The badge requests resized PNG images
@@ -23,7 +24,7 @@ Copy this app directory to the badge's `/system/apps/fishface` (the USB drive's
 `apps/fishface`). Use the repository's `badge25/apps/menu/__init__.py` menu,
 which discovers apps and supports multiple pages. Restart the badge.
 
-- A: switch selfie / best matched fish.
+- A: next gallery entry.
 - B: pause / resume rotation.
 - C: next gallery entry.
 - HOME: return to menu.
@@ -38,7 +39,7 @@ MongoDB credentials.
 
 Gallery results and images are saved in `/fishface-cache` on the writable root
 filesystem. The cache survives app exits and restarts. Images are keyed by URL,
-so shared fish images are reused between players. Cached pairs can play offline.
+so shared fish images are reused between players. Cached rows can play offline.
 The cache has a 512 KiB budget; older files are removed to make room for new
 downloads. Evicted images are downloaded again when needed. `/system` is
 read-only while apps run.
