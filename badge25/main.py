@@ -7,6 +7,8 @@ import machine
 import gc
 import powman
 
+sys.path.insert(0, "/system/lib")
+
 SKIP_CINEMATIC = powman.get_wake_reason() == powman.WAKE_WATCHDOG
 
 running_app = None

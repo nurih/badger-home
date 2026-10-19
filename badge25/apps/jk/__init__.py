@@ -4,6 +4,7 @@ import random
 import network
 from urllib.urequest import urlopen
 from badgeware import screen, PixelFont, brushes, io, run
+from colorpicker import ColorPicker
 
 
 JOKES_URL = "https://official-joke-api.appspot.com/jokes/programming/ten"
@@ -23,6 +24,8 @@ last_slide = 0
 retry_at = 0
 status = "Connecting Wi-Fi"
 first_frame = True
+colorpicker = None
+picker_started = 0
 
 
 def init():
@@ -103,6 +106,20 @@ def advance():
 
 def update():
     global show_punch, last_slide, first_frame
+    global colorpicker, picker_started, background_color
+    if colorpicker is not None and colorpicker.busy:
+        background_color = colorpicker.pick()
+        if colorpicker.busy:
+            return
+        last_slide += io.ticks - picker_started
+    elif io.BUTTON_B in io.pressed:
+        if colorpicker is None:
+            colorpicker = ColorPicker((0, 0, 0))
+        else:
+            colorpicker.start()
+        picker_started = io.ticks
+        return
+
     # Return one drawn frame before any blocking network work.
     if first_frame:
         first_frame = False

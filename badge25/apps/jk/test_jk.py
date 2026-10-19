@@ -15,20 +15,27 @@ APP = Path(__file__).resolve().parent / "__init__.py"
 class JokeTests(unittest.TestCase):
     def setUp(self):
         self.screen = Mock(width=160, height=120)
+        self.screen.window.return_value = Mock(width=160, height=120)
+        self.screen.window.return_value.measure_text.side_effect = lambda text: (len(text) * 6, 8)
         self.screen.measure_text.side_effect = lambda text: (len(text) * 6, 8)
-        self.io = types.SimpleNamespace(ticks=0)
+        self.io = types.SimpleNamespace(ticks=0, pressed=set(), BUTTON_A="A", BUTTON_B="B",
+                                        BUTTON_C="C", BUTTON_UP="UP", BUTTON_DOWN="DOWN")
         self.urlopen = Mock()
         modules = {
             "network": types.ModuleType("network"),
             "urllib.urequest": types.SimpleNamespace(urlopen=self.urlopen),
             "badgeware": types.SimpleNamespace(
                 screen=self.screen, io=self.io, PixelFont=Mock(),
-                brushes=Mock(), run=Mock(),
+                brushes=types.SimpleNamespace(color=lambda *rgb: rgb), run=Mock(),
+                shapes=types.SimpleNamespace(rectangle=lambda *args: args),
             ),
         }
         self.font_loader = modules["badgeware"].PixelFont.load
         with patch.dict(sys.modules, modules):
-            app = runpy.run_path(str(APP))
+            picker_module = types.ModuleType("colorpicker")
+            picker_module.ColorPicker = runpy.run_path(str(APP.parents[2] / "lib/colorpicker.py"))["ColorPicker"]
+            with patch.dict(sys.modules, {"colorpicker": picker_module}):
+                app = runpy.run_path(str(APP))
         self.app = app["update"].__globals__
         self.app["first_frame"] = False
         self.app["wlan"] = Mock()
@@ -63,6 +70,34 @@ class JokeTests(unittest.TestCase):
         self.assertEqual(self.frame(0), ["Connecting Wi-Fi"])
         self.urlopen.assert_not_called()
         self.assertEqual(self.frame(1), ["Setup"])
+
+    def test_picker_changes_background_and_pauses_joke_timer(self):
+        self.respond([{"setup": "Setup", "punchline": "Punch"}])
+        self.frame(0)
+        font = self.screen.font
+        self.io.pressed = {"B"}
+        self.frame(1000)
+        self.assertTrue(self.app["colorpicker"].busy)
+        self.io.pressed = {"UP"}
+        self.frame(11000)
+        self.assertFalse(self.app["show_punch"])
+        self.assertEqual(self.urlopen.call_count, 1)
+        self.io.pressed = {"B"}
+        backgrounds = []
+        self.screen.clear.side_effect = lambda: backgrounds.append(self.screen.brush)
+        self.assertEqual(self.frame(12000), ["Setup"])
+        self.assertEqual(backgrounds, [(5, 0, 0)])
+        self.assertEqual(self.app["background_color"], (5, 0, 0))
+        self.assertFalse(self.app["colorpicker"].busy)
+        self.assertIs(self.screen.font, font)
+        self.io.pressed = set()
+        self.assertEqual(self.frame(15999), ["Setup"])
+        self.assertEqual(self.frame(16000), ["Setup", "Punch"])
+        self.io.pressed = {"B"}
+        self.frame(17000)
+        self.io.pressed = {"B"}
+        self.frame(17001)
+        self.assertEqual(self.app["background_color"], (5, 0, 0))
 
     def test_drawing_does_not_require_font_getter(self):
         screen = self.screen

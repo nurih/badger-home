@@ -1,6 +1,7 @@
 import os
 import random
 from badgeware import screen, PixelFont, brushes, io, run
+from colorpicker import ColorPicker
 
 """ Show all available fonts """
 
@@ -68,6 +69,7 @@ painted_font = None
 screen.font = current_font
 background_color = brushes.color(0, 0, 0)
 text_color = brushes.color(0, 255, 100)
+colorpicker = None
 
 demo_text = (
     """Lorem ipsum dolor sit amet. 1234567890-+ !@#4%^&*()_+ []\\\{\}|;':",./<>?"""
@@ -130,12 +132,20 @@ def advance(step):
 
 
 def update():
-    global painted_font
+    global painted_font, colorpicker, text_color, background_color
 
-    if io.BUTTON_B in io.pressed:
-        clear_screen()
-        text = "Buttons [A] or[UP]: prev. Buttons [C] or [DOWN] next."
-        paint_footer(text)
+    if colorpicker is not None and colorpicker.busy:
+        text_color = colorpicker.pick()
+        background_color = colorpicker.complement
+        if colorpicker.busy:
+            return
+        painted_font = None
+    elif io.BUTTON_B in io.pressed:
+        if colorpicker is None:
+            colorpicker = ColorPicker((0, 255, 100))
+        else:
+            colorpicker.start()
+        return
 
     if any([button in io.pressed for button in (io.BUTTON_A, io.BUTTON_UP)]):
         advance(-1)
